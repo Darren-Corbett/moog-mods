@@ -4,7 +4,7 @@ A plugin marketplace holding my Claude Code mods. Each mod lives in its own fold
 
 | Mod | What it does | Status |
 |---|---|---|
-| [clean-view](clean-view/) | Checklist band above the prompt; folds read-only tool noise | Placeholder, build with `clean-view/BUILD-PROMPT.md` |
+| [clean-view](clean-view/) | Checklist band above the prompt; folds read-only tool noise | 0.1.0 |
 
 ## Install on any computer
 

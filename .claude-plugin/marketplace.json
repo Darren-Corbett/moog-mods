@@ -5,6 +5,7 @@
   "plugins": [
     {
       "name": "clean-view",
+      "version": "0.1.0",
       "source": "./clean-view",
       "description": "Checklist band above the prompt, with read-only tool noise folded into one line. Diffs, commands and failures stay visible."
     }

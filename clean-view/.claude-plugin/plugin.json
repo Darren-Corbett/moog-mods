@@ -1,6 +1,15 @@
 {
   "name": "clean-view",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Checklist band above the prompt, with read-only tool noise folded into one line. Diffs, commands and failures stay visible.",
-  "author": { "name": "Darren Corbett" }
+  "author": { "name": "Darren Corbett" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "nudgeTaskLists": {
+      "type": "boolean",
+      "title": "Nudge task lists",
+      "description": "Ask Claude to keep a short task list for multi-step work. Adds a few lines to the system prompt.",
+      "default": false
+    }
+  }
 }
