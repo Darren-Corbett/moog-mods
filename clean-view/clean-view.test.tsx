@@ -34,6 +34,8 @@ function engine(on: On) {
   on('fs.exists', () => ({ value: false }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.close', () => ({ value: undefined }) as never)
   on('tool.register', () => (calls.toolRegister++, { value: undefined }) as never)
   on('model.complete', () => (calls.modelComplete++, { value: undefined }) as never)
   for (const name of ['Notification', 'PermissionDenied', 'StopFailure', 'UserPromptSubmit'] as const) on(`classic.${name}`, () => ({}))
@@ -214,4 +216,27 @@ test('9. no tool call is ever denied', async ($, on) => {
     await $.tool.call({ tool: 'AskUserQuestion', questions: [] }),
   ]
   for (const ran of outcomes) expect(ran.deny).toBeUndefined()
+})
+
+test('9. still true with the pane open: no tools, no prompt section, no model calls, nothing denied', async ($, on) => {
+  const { calls } = engine(on)
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' }] }))
+  await startJob($)
+  await $.command.run(command('pane'))
+  await $.command.run(command('help'))
+  const outcomes = [
+    await $.tool.call({ tool: 'Read', file_path: '/repo/a.ts' }),
+    await $.tool.call({ tool: 'Edit', file_path: '/repo/a.ts', old_string: 'a', new_string: 'b' }),
+    await $.tool.call({ tool: 'Bash', command: 'false' }),
+  ]
+  for (const ran of outcomes) expect(ran.deny).toBeUndefined()
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  const pane = await $.ui.mount({
+    plugin: 'clean-view', component: 'Pane', requestId: 'clean-view-progress', surface: 'desktop',
+    props: { title: 'Progress', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  } as never)
+  expect(await pane.find({ type: 'Text', text: /Recent jobs/ })).toBeDefined()
+  await pane.unmount()
+  expect((await $.prompt.compose(COMPOSE as never)).sections.map(s => s.id)).toEqual(['intro'])
+  expect(calls).toEqual({ toolRegister: 0, modelComplete: 0 })
 })

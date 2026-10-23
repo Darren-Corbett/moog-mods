@@ -16,9 +16,41 @@ It only observes. With default settings it adds nothing to the system prompt, re
 
 The checklist comes from Claude's own task list (TaskCreate / TaskUpdate / TodoWrite) or from a plan you approve in plan mode. Without a task list the band shows the job name, elapsed time, tool-call count and the folded line. Quick questions with no tool calls show no band, just the mode button.
 
+## Progress pane
+
+`/clean pane` (or the band's `Pane` button) opens a live view of the job beside the chat; run it again to close it. If you leave it open, it reopens next session; it never opens on its own otherwise.
+
+```
+Refactor the auth middleware  Working  1m 50s
+
+2 of 4 steps
+██████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░
+
+✓ Read the session handling    ██████              0:38 · 5 calls
+▶ Split token refresh          ████████▒▒          1:12 · 9 calls  ⚠ 1 failed
+○ Update callers
+○ Run the test suite
+
+Edited token.ts
+Read session.ts, routes.ts
+Searched "refreshToken"
+Last: Bash · npm test · 12s ago
+
+Recent jobs
+✓ Fix the flaky login test · 2m 14s · 3 steps
+```
+
+- **Header:** job name, phase (Working, Planning, Needs you, Stuck, Stopped, All done), total time.
+- **Progress:** steps done out of total, or "No task list yet" with the tool-call count.
+- **Timeline:** one row per step; each bar is the step's share of the time. The active bar grows live and ends in a lighter segment. ⚠ marks failed tool calls on the step they happened in; ‖ marks a step waiting on you.
+- **Active step:** files edited (first, in the accent colour) and read, searches, and the last tool call.
+- **Recent jobs:** the last 5 finished jobs (✓ done, ■ stopped, ⚠ stuck or errored), kept across restarts.
+
+On Claude Code Desktop the timeline is drawn as an SVG Gantt chart; in the terminal and VS Code it is text. In off mode the pane just says how to turn Clean View back on.
+
 ## Modes
 
-`/clean focus|band|calm|off`, `/clean` on its own to cycle, or click the mode button. The mode is remembered across restarts.
+`/clean focus|band|calm|off`, `/clean` on its own to cycle, or click the mode button. The mode is remembered across restarts. `/clean help` prints one line per mode.
 
 | Mode | What you see |
 |---|---|

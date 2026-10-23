@@ -94,3 +94,102 @@ test('plan steps come from the approved plan', () => {
   expect(c.tasks).toHaveLength(3)
   expect(c.phase).toBe('working')
 })
+
+// ── 0.2.0: progress pane ────────────────────────────────────────────────────
+
+const steps = (names: string[]) => {
+  let c = L.reduce(L.emptyChecklist(), { type: 'job', text: 'refactor auth', now: 0 })
+  names.forEach((name, i) => (c = L.reduce(c, { type: 'task.create', id: String(i + 1), name })))
+  return c
+}
+
+test('pane 1. bars scale 1:3:6 and the widest fills the width', () => {
+  expect(L.barWidths([10_000, 30_000, 60_000], 60)).toEqual([10, 30, 60])
+  expect(L.barWidths([10_000, 30_000, 60_000], 30)).toEqual([5, 15, 30])
+  expect(L.barWidths([0, 0], 20)).toEqual([0, 0])
+
+  let c = steps(['One', 'Two', 'Three'])
+  c = L.reduce(c, { type: 'task.update', id: '1', status: 'in_progress', now: 0 })
+  c = L.reduce(c, { type: 'task.update', id: '1', status: 'completed', now: 10_000 })
+  c = L.reduce(c, { type: 'task.update', id: '2', status: 'in_progress', now: 10_000 })
+  c = L.reduce(c, { type: 'task.update', id: '2', status: 'completed', now: 40_000 })
+  c = L.reduce(c, { type: 'task.update', id: '3', status: 'in_progress', now: 40_000 })
+  const rows = L.timelineRows(c, 100_000, 60)
+  expect(rows.map(r => r.cells)).toEqual([10, 30, 60])
+  expect(rows.map(r => r.time)).toEqual(['0:10 · 0 calls', '0:30 · 0 calls', '1:00 · 0 calls'])
+  expect(L.barText(10, true)).toBe('████████▒▒')
+  expect(L.barText(6, false)).toBe('██████')
+})
+
+test('pane 2. a Read and an Edit during step 2 land in step 2, not step 1', () => {
+  let c = steps(['One', 'Two'])
+  c = L.reduce(c, { type: 'task.update', id: '1', status: 'in_progress', now: 0 })
+  c = L.reduce(c, { type: 'tool.start', tool: 'Read', input: { file_path: '/repo/a.ts' }, now: 1 })
+  c = L.reduce(c, { type: 'task.update', id: '1', status: 'completed', now: 2 })
+  c = L.reduce(c, { type: 'task.update', id: '2', status: 'in_progress', now: 2 })
+  c = L.reduce(c, { type: 'tool.start', tool: 'Read', input: { file_path: '/repo/src/auth.ts' }, now: 3 })
+  c = L.reduce(c, { type: 'tool.start', tool: 'Edit', input: { file_path: '/repo/src/session.ts' }, now: 4 })
+  c = L.reduce(c, { type: 'tool.start', tool: 'Grep', input: { pattern: 'refreshToken' }, now: 5 })
+  expect(c.tasks[0]!.touched).toEqual({ read: ['a.ts'], edited: [], searches: [] })
+  expect(c.tasks[1]!.touched).toEqual({ read: ['auth.ts'], edited: ['session.ts'], searches: ['refreshToken'] })
+  expect(c.lastCall).toEqual({ tool: 'Grep', summary: 'refreshToken', at: 5 })
+  expect(L.touchedLines(c.tasks[1]!.touched)).toEqual({ edited: 'Edited session.ts', read: 'Read auth.ts', searches: 'Searched "refreshToken"' })
+  const many = { read: ['1', '2', '3', '4', '5', '6', '7', '8'], edited: [], searches: ['a', 'b', 'c', 'd'] }
+  expect(L.touchedLines(many)).toMatchObject({ read: 'Read 1, 2, 3, 4, 5, 6 +2', searches: 'Searched "a", "b", "c" +1' })
+})
+
+test('pane 3. a failed call during the active step counts on that step and shows ⚠', () => {
+  let c = steps(['One', 'Two'])
+  c = L.reduce(c, { type: 'task.update', id: '1', status: 'completed', now: 0 })
+  c = L.reduce(c, { type: 'task.update', id: '2', status: 'in_progress', now: 0 })
+  c = L.reduce(c, { type: 'tool.start', tool: 'Bash', input: { command: 'npm test' }, now: 1 })
+  c = L.reduce(c, { type: 'tool.end', isError: true, isDenied: false })
+  expect(c.tasks.map(t => t.failures)).toEqual([0, 1])
+  const rows = L.timelineRows(c, 10_000, 20)
+  expect(L.failureText(rows[1]!.failures)).toBe('⚠ 1 failed')
+  expect(L.failureText(rows[0]!.failures)).toBe('')
+  expect(L.timelineAlt(rows)).toMatch(/▶ Two .*⚠ 1 failed/)
+  expect(L.timelineSvg(rows)).toContain(L.SVG_COLORS.failed)
+  c = L.reduce(c, { type: 'needs-you', reason: 'permission' })
+  expect(L.timelineRows(c, 10_000, 20)[1]!.mark).toBe('‖')
+})
+
+test('pane 4. finishing a job adds it to history; a sixth drops the oldest', () => {
+  let h: ReturnType<typeof L.addHistory> = []
+  for (let i = 1; i <= 6; i++) {
+    let c = L.reduce(L.emptyChecklist(), { type: 'job', text: `job ${i}`, now: i * 1000 })
+    c = L.reduce(c, { type: 'turn.end', reason: i === 3 ? 'aborted' : 'answer', now: i * 1000 + 5000 })
+    const r = L.jobRecord(c)
+    expect(r).not.toBeNull()
+    h = L.addHistory(h, r!)
+  }
+  expect(h).toHaveLength(5)
+  expect(h.map(r => r.title)).toEqual(['Job 6', 'Job 5', 'Job 4', 'Job 3', 'Job 2'])
+  expect(L.historyLine(h[0]!)).toBe('✓ Job 6 · 5s · 0 steps')
+  expect(L.historyLine(h[3]!)).toBe('■ Job 3 · 5s · 0 steps')
+  // A job that ends again replaces its own entry.
+  expect(L.addHistory(h, { ...h[0]!, outcome: 'stopped' })).toHaveLength(5)
+  // Needs you at the end of a turn is not finished.
+  const waiting = L.reduce(steps(['One']), { type: 'turn.end', reason: 'answer', now: 1 })
+  expect(L.jobRecord(waiting)).toBeNull()
+})
+
+test('pane 5. a 0.1.0-shaped checklist and history get defaults', () => {
+  const old = { title: 'x', phase: 'working', tasks: [{ id: '1', name: 'A', status: 'active', startedAt: 0, toolCalls: 1 }] }
+  const c = L.normalizeChecklist(old as never)
+  expect(c.lastCall).toBeNull()
+  expect(c.tasks[0]).toMatchObject({ endedAt: null, failures: 0, touched: { read: [], edited: [], searches: [] } })
+  expect(() => L.timelineRows(old as never, 5000, 20)).not.toThrow()
+  expect(L.reduce(old as never, { type: 'tool.start', tool: 'Read', input: { file_path: '/r/a.ts' }, now: 1 }).tasks[0]!.touched.read).toEqual(['a.ts'])
+  expect(L.normalizeHistory(undefined)).toEqual([])
+  expect(L.normalizeHistory([{ title: 'T' }, null, 3])).toEqual([{ title: 'T', outcome: 'done', durationMs: 0, steps: 0, startedAt: 0 }])
+})
+
+test('mode help has one line per mode', () => {
+  expect(L.helpText().split('\n')).toEqual([
+    'focus: band on; reads and searches folded; diffs, commands and failures shown',
+    'band: band on; every tool row shown',
+    'calm: band on; all tool rows hidden',
+    'off: band hidden except the mode button',
+  ])
+})

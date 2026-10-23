@@ -1,6 +1,6 @@
 {
   "name": "clean-view",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Checklist band above the prompt, with read-only tool noise folded into one line. Diffs, commands and failures stay visible.",
   "author": { "name": "Darren Corbett" },
   "types": "./types/index.d.ts",

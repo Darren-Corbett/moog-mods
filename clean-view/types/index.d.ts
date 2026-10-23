@@ -7,8 +7,13 @@ export type Task = {
   name: string
   status: TaskStatus
   startedAt: number | null
+  endedAt: number | null
   toolCalls: number
+  failures: number
+  touched: Touched
 }
+
+export type Touched = { read: string[]; edited: string[]; searches: string[] }
 
 export type Phase =
   | 'idle'
@@ -33,7 +38,13 @@ export type Checklist = {
   isCollapsed: boolean
   toolCalls: number
   failStreak: number
+  lastCall: { tool: string; summary: string; at: number } | null
 }
+
+export type JobOutcome = 'done' | 'stopped' | 'stuck' | 'error'
+
+// `startedAt` identifies the job, so a resumed job replaces its own entry.
+export type JobRecord = { title: string; outcome: JobOutcome; durationMs: number; steps: number; startedAt: number }
 
 export type Folded = {
   files: string[]
@@ -53,6 +64,8 @@ declare module 'claude-code' {
       errors: string[]
       now: number
       isUnfolded: boolean
+      history: JobRecord[]
+      isPaneOpen: boolean
     }
   }
 }

@@ -1,4 +1,4 @@
-import type { Checklist, Folded, Mode, Phase, Task, TaskStatus } from './types'
+import type { Checklist, Folded, JobOutcome, JobRecord, Mode, Phase, Task, TaskStatus, Touched } from './types'
 
 // Pure logic for Clean View: no `$`, so every function here is unit tested.
 
@@ -13,6 +13,14 @@ export function isNewerVersion(version: string, tested: string): boolean {
 }
 
 export const modeLabel = (m: Mode) => m.charAt(0).toUpperCase() + m.slice(1)
+
+export const MODE_HELP: Readonly<Record<Mode, string>> = {
+  focus: 'band on; reads and searches folded; diffs, commands and failures shown',
+  band: 'band on; every tool row shown',
+  calm: 'band on; all tool rows hidden',
+  off: 'band hidden except the mode button',
+}
+export const helpText = () => MODES.map(m => `${m}: ${MODE_HELP[m]}`).join('\n')
 
 // ── Names ───────────────────────────────────────────────────────────────────
 
@@ -54,13 +62,33 @@ export function planSteps(plan: string): string[] {
 export const emptyChecklist = (): Checklist => ({
   title: '', phase: 'idle', tasks: [], needsYouReason: null, stuckReason: null,
   errorText: null, errorType: null, startedAt: null, finishedAt: null,
-  isCollapsed: false, toolCalls: 0, failStreak: 0,
+  isCollapsed: false, toolCalls: 0, failStreak: 0, lastCall: null,
 })
+
+export const emptyTouched = (): Touched => ({ read: [], edited: [], searches: [] })
+export const newTask = (id: string, name: string): Task =>
+  ({ id, name, status: 'upcoming', startedAt: null, endedAt: null, toolCalls: 0, failures: 0, touched: emptyTouched() })
+
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : [])
+
+// State saved by an older version lacks newer fields: fill them so nothing reads undefined.
+export function normalizeTask(t: Partial<Task>): Task {
+  const touched = (t.touched ?? {}) as Partial<Touched>
+  return {
+    ...newTask(String(t.id ?? ''), String(t.name ?? '')), ...t,
+    endedAt: t.endedAt ?? null, failures: t.failures ?? 0,
+    touched: { read: strings(touched.read), edited: strings(touched.edited), searches: strings(touched.searches) },
+  }
+}
+export function normalizeChecklist(c: Partial<Checklist> | null | undefined): Checklist {
+  const base = { ...emptyChecklist(), ...c }
+  return { ...base, lastCall: base.lastCall ?? null, tasks: Array.isArray(base.tasks) ? base.tasks.map(normalizeTask) : [] }
+}
 
 export type ChecklistEvent =
   | { type: 'job'; text: string; now: number }
   | { type: 'planning' }
-  | { type: 'tool.start' }
+  | { type: 'tool.start'; tool?: string; input?: unknown; now?: number }
   | { type: 'tool.end'; isError: boolean; isDenied: boolean }
   | { type: 'task.create'; id: string; name: string }
   | { type: 'task.update'; id: string; status?: string; name?: string; now: number }
@@ -86,10 +114,15 @@ export const isVisible = (c: Checklist) =>
 const resume = (c: Checklist): Checklist =>
   c.phase === 'needs-you' || c.phase === 'stuck' ? { ...c, phase: 'working', needsYouReason: null, stuckReason: null } : c
 
-const start = (t: Task, status: TaskStatus, now: number): Task =>
-  ({ ...t, status, startedAt: status === 'active' ? (t.startedAt ?? now) : t.startedAt })
+const start = (t: Task, status: TaskStatus, now: number): Task => ({
+  ...t,
+  status,
+  startedAt: status === 'active' ? (t.startedAt ?? now) : t.startedAt,
+  endedAt: status === 'done' ? (t.endedAt ?? (t.startedAt === null ? null : now)) : status === 'active' ? null : t.endedAt,
+})
 
-export function reduce(c: Checklist, ev: ChecklistEvent): Checklist {
+export function reduce(saved: Checklist, ev: ChecklistEvent): Checklist {
+  let c = normalizeChecklist(saved)
   const live = c.phase !== 'idle'
   switch (ev.type) {
     case 'job':
@@ -99,11 +132,15 @@ export function reduce(c: Checklist, ev: ChecklistEvent): Checklist {
       return live ? { ...c, phase: 'planning' } : c
     case 'tool.start': {
       if (!live) return c
-      const tasks = c.tasks.map(t => (t.status === 'active' ? { ...t, toolCalls: t.toolCalls + 1 } : t))
-      return { ...c, tasks, toolCalls: c.toolCalls + 1, ...(c.phase === 'needs-you' ? { phase: 'working', needsYouReason: null } : {}) }
+      const tool = ev.tool
+      const tasks = c.tasks.map(t => (t.status !== 'active' ? t
+        : { ...t, toolCalls: t.toolCalls + 1, touched: tool ? touch(t.touched, tool, ev.input) : t.touched }))
+      const lastCall = tool ? { tool, summary: callSummary(tool, ev.input), at: ev.now ?? 0 } : c.lastCall
+      return { ...c, tasks, lastCall, toolCalls: c.toolCalls + 1, ...(c.phase === 'needs-you' ? { phase: 'working', needsYouReason: null } : {}) }
     }
     case 'tool.end': {
       if (!live) return c
+      if (ev.isError) c = { ...c, tasks: c.tasks.map(t => (t.status === 'active' ? { ...t, failures: t.failures + 1 } : t)) }
       if (ev.isDenied) return { ...c, phase: 'stuck', stuckReason: DENIED, needsYouReason: null, failStreak: 0 }
       if (!ev.isError) return { ...resume(c), failStreak: 0 }
       const failStreak = c.failStreak + 1
@@ -111,7 +148,7 @@ export function reduce(c: Checklist, ev: ChecklistEvent): Checklist {
     }
     case 'task.create':
       if (!live || c.tasks.some(t => t.id === ev.id)) return c
-      return { ...c, tasks: [...c.tasks, { id: ev.id, name: cleanName(ev.name), status: 'upcoming', startedAt: null, toolCalls: 0 }] }
+      return { ...c, tasks: [...c.tasks, newTask(ev.id, cleanName(ev.name))] }
     case 'task.update': {
       if (ev.status === 'deleted') return { ...c, tasks: c.tasks.filter(t => t.id !== ev.id) }
       const status = ev.status ? STATUS[ev.status] : undefined
@@ -124,15 +161,14 @@ export function reduce(c: Checklist, ev: ChecklistEvent): Checklist {
       const tasks = ev.todos.map((todo, i): Task => {
         const name = cleanName(todo.content)
         const before = c.tasks.find(t => t.name === name)
-        const base = before ?? { id: `todo-${i}`, name, status: 'upcoming', startedAt: null, toolCalls: 0 }
+        const base = before ?? newTask(`todo-${i}`, name)
         return start({ ...base, id: `todo-${i}` }, STATUS[String(todo.status)] ?? 'upcoming', ev.now)
       })
       return { ...c, tasks }
     }
     case 'plan': {
       if (!live) return c
-      const tasks = c.tasks.length > 0 ? c.tasks : planSteps(ev.text).map((name, i): Task =>
-        ({ id: `plan-${i}`, name, status: 'upcoming', startedAt: null, toolCalls: 0 }))
+      const tasks = c.tasks.length > 0 ? c.tasks : planSteps(ev.text).map((name, i) => newTask(`plan-${i}`, name))
       return { ...c, tasks, phase: 'working' }
     }
     case 'needs-you':
@@ -264,6 +300,7 @@ export const progressBar = (done: number, total: number, cells = 10) => {
 export const fit = (s: string, n: number) => (s.length <= n ? s : n <= 1 ? '…' : s.slice(0, n - 1) + '…')
 
 export const RIGHT_COLUMN = 16
+export const PANE_BUTTON_WIDTH = 9 // `[ Pane ]` and a space
 export const MIN_STEP_COLUMNS = 50
 export const nameColumn = (bodyColumns: number) => Math.max(8, Math.min(50, bodyColumns - 2 - RIGHT_COLUMN - 1))
 
@@ -291,3 +328,189 @@ export function header(c: Checklist, now: number): Header {
     default: return plain(`${title} · ${took}${calls}`)
   }
 }
+
+// ── Progress pane ───────────────────────────────────────────────────────────
+
+const READS: ReadonlySet<string> = new Set(['Read', 'LS', 'NotebookRead'])
+const searchOf = (tool: string, input: unknown) =>
+  tool === 'Glob' || tool === 'Grep' ? field(input, 'pattern') : tool === 'WebSearch' ? field(input, 'query') : undefined
+
+// What one tool call adds to its step's touched lists, as basenames and patterns.
+export function touch(t: Touched, tool: string, input: unknown): Touched {
+  const path = toolPath(input)
+  const add = (list: string[], v: string) => (list.includes(v) ? list : [...list, v].slice(-50))
+  if (EDITS.has(tool) && path) return { ...t, edited: add(t.edited, basename(path)) }
+  if (READS.has(tool) && path) return { ...t, read: add(t.read, basename(path)) }
+  const search = searchOf(tool, input)
+  return search ? { ...t, searches: add(t.searches, search) } : t
+}
+
+const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+export function callSummary(tool: string, input: unknown): string {
+  const path = toolPath(input)
+  const url = field(input, 'url')
+  const host = url ? /^[a-z]+:\/\/([^/:?#]+)/i.exec(url)?.[1] : undefined
+  const text = (tool === 'Bash' ? field(input, 'command') : undefined)
+    ?? (path ? basename(path) : undefined)
+    ?? searchOf(tool, input) ?? host
+    ?? field(input, 'subject') ?? field(input, 'description') ?? field(input, 'command') ?? ''
+  return fit(oneLine(text), 60)
+}
+
+export const listWithMore = (list: readonly string[], n: number, quote = false) =>
+  list.slice(0, n).map(s => (quote ? `"${trimTo(s, 24)}"` : s)).join(', ') + more(list.length - n)
+
+// The active step's detail: edited files first, then reads not also edited.
+export function touchedLines(t: Touched): { edited: string | null; read: string | null; searches: string | null } {
+  const read = t.read.filter(f => !t.edited.includes(f))
+  return {
+    edited: t.edited.length ? `Edited ${listWithMore(t.edited, 6)}` : null,
+    read: read.length ? `Read ${listWithMore(read, 6)}` : null,
+    searches: t.searches.length ? `Searched ${listWithMore(t.searches, 3, true)}` : null,
+  }
+}
+
+export const ago = (ms: number) => (ms < 5000 ? 'just now' : `${duration(ms)} ago`)
+
+export function stepMs(t: Task, now: number): number {
+  if (t.startedAt === null || t.status === 'upcoming') return 0
+  return Math.max(0, (t.endedAt ?? (t.status === 'active' ? now : t.startedAt)) - t.startedAt)
+}
+
+// Each bar is its step's share of the time, scaled so the longest fills `width`.
+export function barWidths(ms: readonly number[], width: number): number[] {
+  const max = Math.max(0, ...ms)
+  return ms.map(n => (max > 0 ? Math.round((n / max) * Math.max(0, width)) : 0))
+}
+
+// The active bar ends in a lighter segment: the part still growing.
+export const barText = (cells: number, isActive: boolean) =>
+  isActive ? '█'.repeat(Math.max(0, cells - 2)) + '▒'.repeat(Math.min(2, Math.max(1, cells))) : '█'.repeat(cells)
+
+export type TimelineRow = {
+  name: string
+  status: TaskStatus
+  mark: string
+  cells: number
+  ms: number
+  time: string
+  failures: number
+}
+
+export function timelineRows(c: Checklist, now: number, barWidth: number): TimelineRow[] {
+  const tasks = normalizeChecklist(c).tasks
+  const ms = tasks.map(t => stepMs(t, now))
+  const cells = barWidths(ms, barWidth)
+  return tasks.map((t, i) => {
+    const isActive = t.status === 'active'
+    return {
+      name: t.name,
+      status: t.status,
+      mark: t.status === 'done' ? '✓' : isActive ? (c.phase === 'needs-you' ? '‖' : '▶') : '○',
+      cells: t.status === 'upcoming' ? 0 : isActive ? Math.max(1, cells[i] ?? 0) : (cells[i] ?? 0),
+      ms: ms[i] ?? 0,
+      time: t.status === 'upcoming' ? '' : `${stepClock(ms[i] ?? 0)} · ${t.toolCalls} call${t.toolCalls === 1 ? '' : 's'}`,
+      failures: t.failures,
+    }
+  })
+}
+
+export const failureText = (n: number) => (n > 0 ? `⚠ ${n} failed` : '')
+
+// Column widths for a timeline row of `cols` cells: mark, name, bar, time, failures.
+export function timelineColumns(cols: number) {
+  const name = Math.max(8, Math.min(32, Math.floor(cols * 0.35)))
+  const time = 15
+  const fail = 11
+  const bar = Math.max(0, cols - 2 - name - 1 - 1 - time - fail)
+  return { name, bar: bar >= 4 ? bar : 0, time, fail }
+}
+
+// A window of at most `room` rows that keeps the active step in view.
+export function windowRows<T>(rows: readonly T[], activeIndex: number, room: number): { rows: T[]; hidden: number } {
+  const n = Math.max(1, room)
+  if (rows.length <= n) return { rows: [...rows], hidden: 0 }
+  const from = Math.max(0, Math.min(rows.length - n, (activeIndex < 0 ? 0 : activeIndex) - Math.floor(n / 2)))
+  return { rows: rows.slice(from, from + n), hidden: rows.length - n }
+}
+
+export const PHASE_BADGE: Readonly<Record<Phase, string>> = {
+  idle: '', working: 'Working', planning: 'Planning', 'needs-you': 'Needs you',
+  stuck: 'Stuck', stopped: 'Stopped', done: 'All done', error: 'Stuck',
+}
+
+export const jobTitle = (c: Checklist) => c.tasks[0]?.name ?? (c.title || 'No job yet')
+export const jobMs = (c: Checklist, now: number) => (c.startedAt === null ? 0 : Math.max(0, (c.finishedAt ?? now) - c.startedAt))
+
+// ── History ─────────────────────────────────────────────────────────────────
+
+export const HISTORY_CAP = 5
+const OUTCOME: Partial<Record<Phase, JobOutcome>> = { done: 'done', stopped: 'stopped', stuck: 'stuck', error: 'error' }
+
+export function jobRecord(c: Checklist): JobRecord | null {
+  const outcome = OUTCOME[c.phase]
+  if (!outcome || c.startedAt === null) return null
+  return { title: jobTitle(c), outcome, durationMs: jobMs(c, c.finishedAt ?? c.startedAt), steps: c.tasks.length, startedAt: c.startedAt }
+}
+
+// Newest first; a job that ends again (resumed after Stop) replaces its own entry.
+export const addHistory = (h: readonly JobRecord[], r: JobRecord): JobRecord[] =>
+  [r, ...h.filter(x => x.startedAt !== r.startedAt)].slice(0, HISTORY_CAP)
+
+export function normalizeHistory(v: unknown): JobRecord[] {
+  if (!Array.isArray(v)) return []
+  return v.flatMap((r): JobRecord[] => {
+    if (!r || typeof r !== 'object') return []
+    const o = r as Partial<JobRecord>
+    const outcome = o.outcome && ['done', 'stopped', 'stuck', 'error'].includes(o.outcome) ? o.outcome : 'done'
+    return [{ title: String(o.title ?? 'Job'), outcome, durationMs: Number(o.durationMs) || 0, steps: Number(o.steps) || 0, startedAt: Number(o.startedAt) || 0 }]
+  }).slice(0, HISTORY_CAP)
+}
+
+const OUTCOME_MARK: Readonly<Record<JobOutcome, string>> = { done: '✓', stopped: '■', stuck: '⚠', error: '⚠' }
+export const historyLine = (r: JobRecord) =>
+  `${OUTCOME_MARK[r.outcome]} ${r.title} · ${duration(r.durationMs)} · ${r.steps} step${r.steps === 1 ? '' : 's'}`
+
+// ── Timeline as SVG (desktop) ───────────────────────────────────────────────
+
+const esc = (s: string) => s.replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`)
+export const SVG_COLORS = { done: '#3a9d5d', active: '#d97757', failed: '#d64545', track: '#8884', text: '#8a8a8a' } as const
+
+// A Gantt-style chart: one row per step, bars on a shared time axis.
+export function timelineSvg(rows: readonly TimelineRow[], width = 560): string {
+  const rowH = 26
+  const label = Math.round(width * 0.36)
+  const right = 120
+  const barW = Math.max(40, width - label - right - 16)
+  const cells = barWidths(rows.map(r => (r.status === 'upcoming' ? 0 : r.ms)), barW)
+  const height = rows.length * rowH + 8
+  const body = rows.map((r, i) => {
+    const y = 4 + i * rowH
+    const mid = y + rowH / 2
+    const w = r.status === 'active' ? Math.max(4, cells[i] ?? 0) : (cells[i] ?? 0)
+    const x = label + 8
+    const cls = r.status === 'active' ? 'a' : r.status === 'done' ? 'd' : 'u'
+    const parts = [`<text class="t ${cls}" x="4" y="${mid + 4}">${esc(r.mark)} ${esc(fit(r.name, Math.floor(label / 7.5)))}</text>`]
+    if (r.status === 'done' && w > 0) parts.push(`<rect x="${x}" y="${y + 6}" width="${w}" height="${rowH - 12}" rx="3" fill="${SVG_COLORS.done}" opacity=".75"/>`)
+    if (r.status === 'active') {
+      const tail = Math.min(w, Math.max(4, Math.round(w * 0.2)))
+      parts.push(`<rect x="${x}" y="${y + 5}" width="${w - tail}" height="${rowH - 10}" rx="3" fill="${SVG_COLORS.active}"/>`)
+      parts.push(`<rect x="${x + w - tail}" y="${y + 5}" width="${tail}" height="${rowH - 10}" rx="3" fill="${SVG_COLORS.active}" opacity=".4"/>`)
+    }
+    for (let k = 0; k < Math.min(r.failures, 20); k++) {
+      const tx = x + Math.round(((k + 1) / (Math.min(r.failures, 20) + 1)) * Math.max(w, 8))
+      parts.push(`<line x1="${tx}" y1="${y + 2}" x2="${tx}" y2="${y + rowH - 2}" stroke="${SVG_COLORS.failed}" stroke-width="2"/>`)
+    }
+    if (r.time) parts.push(`<text class="t m" x="${width - right}" y="${mid + 4}">${esc(r.time)}${r.failures ? ` <tspan fill="${SVG_COLORS.failed}">⚠ ${r.failures}</tspan>` : ''}</text>`)
+    return parts.join('')
+  }).join('')
+  // Mid-tone fills read on light and dark: an image can't see the app's theme.
+  const style = `.t{font:12px ui-sans-serif,system-ui,sans-serif;fill:${SVG_COLORS.text}}.d,.m{opacity:.75}.u{opacity:.6}`
+    + `.a{font-weight:700;fill:${SVG_COLORS.active}}`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><style>${style}</style>`
+    + `<line x1="${label + 8}" y1="2" x2="${label + 8}" y2="${height - 2}" stroke="${SVG_COLORS.track}"/>${body}</svg>`
+}
+
+export const timelineAlt = (rows: readonly TimelineRow[]) =>
+  rows.map(r => [r.mark, r.name, r.time, failureText(r.failures)].filter(Boolean).join(' ')).join('\n')

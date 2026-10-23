@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface as Dollar, On, PluginOptions, ResolveInput } from 'claude-code'
 
 import * as L from './logic'
-import type { Checklist, Mode } from './types'
+import { drawPane, PANE_ID } from './pane'
+import type { Checklist, JobRecord, Mode } from './types'
 
 // The Claude Code version this was last tested on; a newer one gets one toast.
 export const TESTED_VERSION = '2.1.308'
@@ -13,6 +14,8 @@ const folded = atom({ plugin: 'clean-view', key: 'folded' } as const, L.emptyFol
 const errors = atom({ plugin: 'clean-view', key: 'errors' } as const, [] as string[])
 const clockNow = atom({ plugin: 'clean-view', key: 'now' } as const, 0)
 const isUnfolded = atom({ plugin: 'clean-view', key: 'isUnfolded' } as const, false)
+const history = atom({ plugin: 'clean-view', key: 'history' } as const, [] as JobRecord[])
+const isPaneOpen = atom({ plugin: 'clean-view', key: 'isPaneOpen' } as const, false)
 
 const NUDGE = {
   id: 'clean-view:task-lists',
@@ -69,6 +72,11 @@ async function syncTicker($: Dollar, ctx: Ctx, c: Checklist) {
 
 async function apply($: Dollar, ctx: Ctx, event: L.ChecklistEvent) {
   const c = await update($, checklist, value => L.reduce(value, event))
+  const record = event.type === 'turn.end' ? L.jobRecord(c) : null
+  if (record) {
+    const list = await update($, history, h => L.addHistory(L.normalizeHistory(h), record))
+    await $.store.set('history', list)
+  }
   await syncTicker($, ctx, c)
   if (c.phase === 'done' && !c.isCollapsed && !ctx.collapse) {
     ctx.collapse = $.clock.after(5000, () => {
@@ -79,12 +87,24 @@ async function apply($: Dollar, ctx: Ctx, event: L.ChecklistEvent) {
   return c
 }
 
-async function setMode($: Dollar, next: Mode) {
+async function setMode($: Dollar, next: Mode, isCycle = false) {
   await update($, mode, () => next)
   await $.store.set('mode', next)
-  $.ui.toast(`Clean View: ${L.modeLabel(next)}`)
+  const isFirstCycle = isCycle && (await $.store.get('hintedHelp')) !== true
+  if (isFirstCycle) await $.store.set('hintedHelp', true)
+  $.ui.toast(`Clean View: ${L.modeLabel(next)}${isFirstCycle ? ' · /clean help explains the modes' : ''}`)
   return next
 }
+
+async function setPane($: Dollar, isOpen: boolean) {
+  if (isOpen) await $.ui.open({ id: PANE_ID, title: 'Progress' })
+  else await $.ui.close({ id: PANE_ID })
+  await update($, isPaneOpen, () => isOpen)
+  await $.store.set('isPaneOpen', isOpen)
+  return isOpen
+}
+const togglePane = async ($: Dollar) => setPane($, !(await read($, isPaneOpen)))
+const cycleMode = async ($: Dollar) => setMode($, L.nextMode(await read($, mode)), true)
 
 const isBeforeEdit = (ids: readonly string[], id: unknown) => typeof id === 'string' && ids.includes(id)
 
@@ -114,7 +134,14 @@ export function registerCleanView(on: On, options: PluginOptions) {
   on('session.start', async ($, e, next) => {
     const stored = await $.store.get('mode')
     if (typeof stored === 'string' && L.isMode(stored)) await update($, mode, () => stored)
-    await $.command.register({ name: 'clean', description: 'Clean View mode: focus, band, calm, off, or doctor', argumentHint: 'focus|band|calm|off|doctor', immediate: true })
+    const saved = L.normalizeHistory(await $.store.get('history'))
+    await update($, history, () => saved)
+    await $.command.register({ name: 'clean', description: 'Clean View: focus, band, calm, off, pane, help or doctor', argumentHint: 'focus|band|calm|off|pane|help|doctor', immediate: true })
+    // Reopen the pane only for someone who left it open.
+    if ((await $.store.get('isPaneOpen')) === true) {
+      await update($, isPaneOpen, () => true)
+      void $.ui.open({ id: PANE_ID, title: 'Progress' }).catch(error => noteError($, ctx, 'ui.open', error))
+    }
     ctx.roots = [e.cwd]
     for (let dir = e.cwd; dir.length > 1; dir = dir.replace(/\/[^/]*$/, '') || '/') {
       if (await $.fs.exists(`${dir}/.git`).catch(() => false)) { if (dir !== e.cwd) ctx.roots.push(dir); break }
@@ -162,7 +189,7 @@ export function registerCleanView(on: On, options: PluginOptions) {
     if (e.agentId !== undefined) return next(e)
     const tool = String(e.tool)
     const path = L.toolPath(e)
-    await apply($, ctx, { type: 'tool.start' })
+    await apply($, ctx, { type: 'tool.start', tool, input: e, now: await $.clock.now() })
     if (tool === 'AskUserQuestion') await apply($, ctx, { type: 'needs-you', reason: 'Claude has a question for you' })
     if (tool === 'EnterPlanMode') await apply($, ctx, { type: 'planning' })
     if (L.foldDecision({ tool, input: e }, { roots: ctx.roots, isBeforeEdit: false }) === 'fold') {
@@ -232,10 +259,20 @@ export function registerCleanView(on: On, options: PluginOptions) {
         ].join('\n'),
       }
     }
-    if (arg && !L.isMode(arg)) return { text: 'Usage: /clean [focus|band|calm|off|doctor]' }
-    const next = await setMode($, arg && L.isMode(arg) ? arg : L.nextMode(await read($, mode)))
+    if (arg === 'help') return { text: `Clean View modes\n${L.helpText()}\n\n/clean pane toggles the progress pane; /clean doctor checks the mod.` }
+    if (arg === 'pane') return { text: (await togglePane($)) ? 'Progress pane opened.' : 'Progress pane closed.' }
+    if (arg && !L.isMode(arg)) return { text: 'Usage: /clean [focus|band|calm|off|pane|help|doctor]' }
+    const next = arg && L.isMode(arg) ? await setMode($, arg) : await cycleMode($)
     return { text: `Clean View: ${L.modeLabel(next)}` }
   }).catch(async ($, e, next) => (await noteError($, ctx, 'command.run', next.error), { text: 'Clean View hit an error; see /clean doctor.' }))
+
+  // The person closing the pane by hand (or our own close) keeps the saved flag honest.
+  on('ui.close', { id: PANE_ID }, async ($, e, next) => {
+    const closed = await next(e)
+    await update($, isPaneOpen, () => false)
+    await $.store.set('isPaneOpen', false)
+    return closed
+  }).catch(async ($, e, next) => (await noteError($, ctx, 'ui.close', next.error), next(e)))
 
   // ── Drawing ──────────────────────────────────────────────────────────────
 
@@ -246,12 +283,16 @@ export function registerCleanView(on: On, options: PluginOptions) {
     const m = await read($, mode)
     const c = await read($, checklist)
     const cols = Math.max(20, e.props?.bodyColumns ?? 80)
-    const button = <Button key="mode" label={`Clean View: ${L.modeLabel(m)}`} onPress={() => read($, mode).then(now => setMode($, L.nextMode(now)))} />
-    if (m === 'off' || !L.isVisible(c)) return <Box flexDirection="row" justifyContent="flex-end">{button}</Box>
+    const modeButton = <Button key="mode" label={`Clean View: ${L.modeLabel(m)}`} onPress={() => cycleMode($)} />
+    if (m === 'off') return <Box flexDirection="row" justifyContent="flex-end">{modeButton}</Box>
+    const paneButton = <Button key="pane" label="Pane" onPress={() => togglePane($)} />
+    if (!L.isVisible(c)) return <Box flexDirection="row" justifyContent="flex-end">{paneButton}{modeButton}</Box>
 
     const head = L.header(c, await read($, clockNow))
     const tone = head.tone === 'plain' ? undefined : head.tone
     const room = cols - L.modeLabel(m).length - 18 - (head.badge ? head.badge.length + 3 : 0) - (head.detail ? head.detail.length + 2 : 0)
+    // The Pane button takes its seat only where the header still fits whole beside it.
+    const hasPaneButton = room - L.PANE_BUTTON_WIDTH >= head.text.length
     const isFull = !(c.phase === 'done' && c.isCollapsed)
     const col = L.nameColumn(cols)
     const nextIndex = c.tasks.findIndex(t => t.status === 'upcoming')
@@ -265,10 +306,10 @@ export function registerCleanView(on: On, options: PluginOptions) {
         <Box flexDirection="row" justifyContent="space-between">
           <Box flexDirection="row" flexShrink={1}>
             {head.badge && <Text inverse bold color={c.phase === 'planning' ? 'planMode' : 'warning'}> {head.badge} </Text>}
-            <Text bold color={tone} wrap="truncate-end">{head.badge ? ' ' : ''}{L.fit(head.text, Math.max(8, room))}</Text>
+            <Text bold color={tone} wrap="truncate-end">{head.badge ? ' ' : ''}{L.fit(head.text, Math.max(8, room - (hasPaneButton ? L.PANE_BUTTON_WIDTH : 0)))}</Text>
             {head.detail && <Text dimColor>  {head.detail}</Text>}
           </Box>
-          {button}
+          <Box flexDirection="row">{hasPaneButton && paneButton}{modeButton}</Box>
         </Box>
         {isFull && cols >= L.MIN_STEP_COLUMNS && c.tasks.map((t, i) => {
           const isActive = t.status === 'active'
@@ -291,6 +332,12 @@ export function registerCleanView(on: On, options: PluginOptions) {
       </Box>
     )
   }).catch(async ($, e, next) => (await noteError($, ctx, 'AbovePrompt', next.error), next(e)))
+
+  on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
+    ctx.drawn.add('Pane')
+    const view = { mode: await read($, mode), checklist: await read($, checklist), history: await read($, history), now: await read($, clockNow) }
+    return drawPane($, e, view)
+  }).catch(async ($, e, next) => (await noteError($, ctx, 'Pane', next.error), next(e)))
 
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
     ctx.drawn.add('ToolUse')
