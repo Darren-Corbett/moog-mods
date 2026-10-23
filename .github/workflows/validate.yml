@@ -1,0 +1,35 @@
+name: Validate mods
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Validate and test every mod
+        run: |
+          set -e
+          claude --version
+          for dir in */; do
+            mod="${dir%/}"
+            [ -f "$mod/.claude-plugin/plugin.json" ] || continue
+            echo "::group::$mod"
+            claude plugin validate --strict "./$mod"
+            if [ -n "$(find "$mod" -name '*.test.ts' -o -name '*.test.tsx' | head -1)" ]; then
+              claude plugin test "./$mod"
+            else
+              echo "No tests in $mod"
+            fi
+            echo "::endgroup::"
+          done
