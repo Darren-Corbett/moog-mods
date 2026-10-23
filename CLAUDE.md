@@ -1,4 +1,4 @@
-# claude-mods
+# moog-mods
 
 This repo is a Claude Code plugin marketplace. Each top-level folder (other than `.claude-plugin`, `.github`) is one mod.
 

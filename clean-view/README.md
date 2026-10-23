@@ -7,7 +7,7 @@ A checklist band above the Claude Code prompt that shows the plan, the current s
 ## Install
 
 ```
-/plugin install clean-view --marketplace OWNER/claude-mods
+/plugin install clean-view --marketplace Darren-Corbett/moog-mods
 ```
 
 ## Modes

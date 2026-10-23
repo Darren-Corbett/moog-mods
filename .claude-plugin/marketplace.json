@@ -1,7 +1,7 @@
 {
-  "name": "my-mods",
-  "owner": { "name": "YOUR NAME" },
-  "description": "My Claude Code mods",
+  "name": "moog-mods",
+  "owner": { "name": "Darren Corbett" },
+  "description": "Darren Corbett's Claude Code mods",
   "plugins": [
     {
       "name": "clean-view",

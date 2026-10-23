@@ -1,4 +1,4 @@
-# My Claude Code mods
+# moog-mods
 
 A plugin marketplace holding my Claude Code mods. Each mod lives in its own folder and is listed in `.claude-plugin/marketplace.json`.
 
@@ -11,7 +11,7 @@ A plugin marketplace holding my Claude Code mods. Each mod lives in its own fold
 In a Claude Code terminal session:
 
 ```
-/plugin install clean-view --marketplace OWNER/claude-mods
+/plugin install clean-view --marketplace Darren-Corbett/moog-mods
 ```
 
 Answer `y` to add the marketplace, then pick a scope (user scope loads it everywhere, including the desktop app's Code tab).
@@ -19,18 +19,18 @@ Answer `y` to add the marketplace, then pick a scope (user scope loads it everyw
 From a shell instead:
 
 ```
-claude plugin install clean-view --marketplace OWNER/claude-mods
+claude plugin install clean-view --marketplace Darren-Corbett/moog-mods
 ```
 
-In the desktop app: click **+** next to the prompt box → **Plugins** → **Add marketplace** with `OWNER/claude-mods` → **Add plugin**.
+In the desktop app: click **+** next to the prompt box → **Plugins** → **Add marketplace** with `Darren-Corbett/moog-mods` → **Add plugin**.
 
 If this repo is private, the machine needs a git credential for github.com first (an SSH key, or `gh auth login` then `gh auth setup-git`).
 
-After pushing changes, pull them with `/plugin marketplace update my-mods`.
+After pushing changes, pull them with `/plugin marketplace update moog-mods`.
 
 ## Build Clean View
 
-1. Clone this repo and `cd claude-mods/clean-view`.
+1. Clone this repo and `cd moog-mods/clean-view`.
 2. Start `claude`, switch to plan mode (Shift+Tab), and paste the contents of `BUILD-PROMPT.md`.
 3. Approve the plan. Claude replaces the placeholder `hooks/register.tsx` with the real mod and adds the tests.
 
