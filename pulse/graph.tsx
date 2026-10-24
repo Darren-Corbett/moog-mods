@@ -100,17 +100,19 @@ const Graph: ClientModule = (raw, surface) => {
   const detail = L.detailLine(f, l)
   const label = L.stepLabel(f.props.steps)
   const rate = L.legendRate(l.columns, L.callsPerMinute(f.props.buckets, L.jobNow(f.props.job, now)))
-  const runs = (list: L.Run[]) => list.map(r => <Text color={r.color} dimColor={r.isDim} inverse={r.isInverse}>{r.text}</Text>)
+  // Every Text cuts rather than wraps: a wrapped row would push the rows below it off the hit test's.
+  const runs = (list: L.Run[]) => list.map(r => <Text color={r.color} dimColor={r.isDim} inverse={r.isInverse} wrap="truncate-end">{r.text}</Text>)
+  const marker = detail.isPinned ? '◆ ' : '▸ '
 
   return (
     <Box flexDirection="column" width={l.columns}>
       <Box key="header" flexDirection="row" justifyContent="space-between">
         <Box flexDirection="row">
-          {header.lead && <Text bold>{header.lead}</Text>}
-          <Text color={L.PHASE_TONE[phase]} dimColor={isPulseDim}>●</Text>
-          <Text color={l.hasLegend ? L.PHASE_TONE[phase] : undefined}>{header.tail}</Text>
+          {header.lead && <Text bold wrap="truncate-end">{header.lead}</Text>}
+          <Text color={L.PHASE_TONE[phase]} dimColor={isPulseDim} wrap="truncate-end">●</Text>
+          <Text color={l.hasLegend ? L.PHASE_TONE[phase] : undefined} wrap="truncate-end">{header.tail}</Text>
         </Box>
-        <Text dimColor>{L.CONTROLS.narrower} {L.CONTROLS.wider}</Text>
+        <Text dimColor wrap="truncate-end">{L.CONTROLS.narrower} {L.CONTROLS.wider}</Text>
       </Box>
       {Array.from({ length: l.waveRows }, (_, row) => (
         <Box key={`wave-${row}`} flexDirection="row">{runs(L.waveRow(f, l, row, highlight))}</Box>
@@ -127,16 +129,16 @@ const Graph: ClientModule = (raw, surface) => {
         <Box key="legend" flexDirection="row" justifyContent="space-between">
           <Box flexDirection="row">
             {L.KINDS.map((k, i) => (
-              <Text>{i > 0 ? ' ' : ''}<Text color={L.KIND_COLOR[k]}>■</Text> {k}</Text>
+              <Text wrap="truncate-end">{i > 0 ? ' ' : ''}<Text color={L.KIND_COLOR[k]}>■</Text> {k}</Text>
             ))}
           </Box>
-          {rate && <Text dimColor>{rate}</Text>}
+          {rate && <Text dimColor wrap="truncate-end">{rate}</Text>}
         </Box>
       )}
-      <Box key="rule"><Text dimColor>{'─'.repeat(l.columns)}</Text></Box>
+      <Box key="rule"><Text dimColor wrap="truncate-end">{'─'.repeat(l.columns)}</Text></Box>
       <Box key="detail">
         <Text wrap="truncate-end" bold={detail.isPinned}>
-          {detail.isPinned ? '◆ ' : '▸ '}{L.fit(detail.text, l.columns - 2)}
+          {marker}{L.fit(detail.text, l.columns - L.cells(marker))}
         </Text>
       </Box>
     </Box>

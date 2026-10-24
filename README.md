@@ -5,7 +5,7 @@ A plugin marketplace holding my Claude Code mods. Each mod lives in its own fold
 | Mod | What it does | Status |
 |---|---|---|
 | [clean-view](clean-view/) | Checklist band above the prompt; folds read-only tool noise | 0.2.0 |
-| [pulse](pulse/) | Live animated graph of Claude's activity in a side pane; hover and click to inspect | 0.1.1 |
+| [pulse](pulse/) | Live animated graph of Claude's activity in a side pane; hover and click to inspect | 0.1.2 |
 
 ## Install on any computer
 

@@ -14,7 +14,7 @@ export const MAX_FILES = 5
 const MAX_NAME = 40
 export const FRAME_MS = 100
 // Below this many body columns the legend goes and the header shortens.
-export const NARROW = 40
+export const NARROW = 41
 // Body columns left empty at the pane's right edge.
 export const MARGIN = 1
 export const MAX_WAVE_ROWS = 6
@@ -319,7 +319,35 @@ export const jobMs = (job: Job, now: number) => (job.startedAt === null ? 0 : Ma
 
 // ── Words ───────────────────────────────────────────────────────────────────
 
-export const fit = (s: string, n: number) => (s.length <= n ? s : n <= 1 ? '…' : s.slice(0, n - 1) + '…')
+// The most cells `s` can take in a terminal. ASCII is one cell; anything else
+// counts two, since CJK and emoji are wide and symbols like ● · ■ ─ and braille
+// are drawn two wide by terminals set to treat ambiguous widths as wide.
+// Joiners, variation selectors and combining marks take none.
+export function cells(s: string): number {
+  let n = 0
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!
+    if (c < 0x80) n += c >= 0x20 ? 1 : 0
+    else if (!((c >= 0x300 && c <= 0x36f) || c === 0x200b || c === 0x200c || c === 0x200d || (c >= 0xfe00 && c <= 0xfe0f))) n += 2
+  }
+  return n
+}
+
+// Cuts `s` to at most `n` cells, whole characters only, ending with `…` when cut.
+export function fit(s: string, n: number): string {
+  if (cells(s) <= n) return s
+  const room = n - cells('…')
+  if (room < 0) return ''
+  let out = ''
+  let w = 0
+  for (const ch of s) {
+    const c = cells(ch)
+    if (w + c > room) break
+    out += ch
+    w += c
+  }
+  return out + '…'
+}
 const secs = (ms: number) => Math.max(0, Math.floor(ms / 1000))
 export const duration = (ms: number) => {
   const s = secs(ms)
@@ -369,31 +397,32 @@ export const KIND_COLOR: Readonly<Record<Kind, string>> = { read: 'suggestion', 
 export const KINDS: readonly Kind[] = ['read', 'search', 'edit', 'run', 'fail']
 
 // The colour key reads `■ read ■ search ■ edit ■ run ■ fail`.
-export const LEGEND_WIDTH = KINDS.reduce((n, k) => n + `■ ${k}`.length, KINDS.length - 1)
+export const LEGEND_WIDTH = KINDS.reduce((n, k) => n + cells(`■ ${k}`), KINDS.length - 1)
 
 // The rate beside the colour key, as long as `columns` leaves room for, or none.
 export function legendRate(columns: number, perMin: number): string {
-  return [`↻ ${perMin} calls/min`, `↻ ${perMin}/min`, `${perMin}/min`].find(r => LEGEND_WIDTH + 1 + r.length <= columns) ?? ''
+  return [`~ ${perMin} calls/min`, `~ ${perMin}/min`, `${perMin}/min`].find(r => LEGEND_WIDTH + 1 + cells(r) <= columns) ?? ''
 }
 
-// The width buttons at the header's right: `[−] [+]`.
-export const CONTROLS = { narrower: '[−]', wider: '[+]' } as const
+// The width buttons at the header's right: `[-] [+]`, ASCII so they are one cell each everywhere.
+export const CONTROLS = { narrower: '[-]', wider: '[+]' } as const
 export const CONTROLS_WIDTH = CONTROLS.narrower.length + 1 + CONTROLS.wider.length
 
 // The header either side of the status dot, fitted to `columns` beside the
 // width buttons. Narrow, it is the dot, the elapsed time and a trimmed job name.
 export function headerText(head: { title: string; elapsed: string; label: string }, columns: number): { lead: string; tail: string } {
   const room = columns - CONTROLS_WIDTH - 1
+  const dot = cells('●')
   if (columns >= NARROW - MARGIN) {
     const elapsed = head.elapsed ? ` · ${head.elapsed}` : ''
     const tail = ` ${head.label}`
-    const fixed = 'Pulse · '.length + elapsed.length + ' · '.length + 1 + tail.length
+    const fixed = cells(`Pulse · ${elapsed} · `) + dot + cells(tail)
     if (room - fixed >= 4) return { lead: `Pulse · ${fit(head.title, room - fixed)}${elapsed} · `, tail }
   }
   const time = head.elapsed ? ` ${head.elapsed}` : ''
   const sep = time ? ' · ' : ' '
-  const nameRoom = room - 1 - time.length - sep.length
-  return { lead: '', tail: nameRoom >= 2 ? `${time}${sep}${fit(head.title, nameRoom)}` : time }
+  const nameRoom = room - dot - cells(time) - cells(sep)
+  return { lead: '', tail: nameRoom >= 3 ? `${time}${sep}${fit(head.title, nameRoom)}` : time }
 }
 
 export function headerParts(job: Job, now: number): { title: string; elapsed: string; label: string } {
@@ -502,7 +531,8 @@ export type Layout = {
 }
 
 // Fits the graph's rows to the region: the wave takes what the other rows leave.
-// `columns` already leaves the pane's right margin, so the legend goes below NARROW body columns.
+// `columns` already leaves the pane's right margin, so the legend goes below NARROW body columns,
+// where its worst-case LEGEND_WIDTH cells no longer fit.
 export function layout(columns: number, rows: number, stepCount: number): Layout {
   const cols = Math.max(10, columns)
   const hasLegend = cols >= NARROW - MARGIN
@@ -639,7 +669,7 @@ export function releasePointer(slot: PointerSlot) {
 export function detailLine(f: Frame, l: Layout): { text: string; isPinned: boolean } {
   const now = frameNow(f)
   const { steps, pinned, last, buckets } = f.props
-  if (f.props.debug) return { text: f.probe ? `mouse ${f.probe.x},${f.probe.y} → ${f.probe.target}` : 'mouse: no pointer yet', isPinned: false }
+  if (f.props.debug) return { text: f.probe ? `${f.probe.x},${f.probe.y} → ${f.probe.target}` : 'mouse: no pointer yet', isPinned: false }
   const describe = (h: Hover): string | null => {
     if (h?.kind === 'column') return columnDetail(columnAt(buckets, h.at, h.span ?? BUCKET_MS), now)
     if (h?.kind === 'step') {

@@ -115,10 +115,11 @@ test('the frame eases towards its heights and settles once the job is done', () 
   expect(f.fill).toBe(1)
 })
 
-test('layout drops the legend below 40 body columns and hit-tests columns and steps', () => {
+test('layout drops the legend below 41 body columns and hit-tests columns and steps', () => {
   // The layout gets the region: body columns less the right margin.
-  expect(L.layout(39 - L.MARGIN, 10, 0).hasLegend).toBe(false)
-  expect(L.layout(40 - L.MARGIN, 10, 0).hasLegend).toBe(true)
+  expect(L.layout(40 - L.MARGIN, 10, 0).hasLegend).toBe(false)
+  expect(L.layout(41 - L.MARGIN, 10, 0).hasLegend).toBe(true)
+  expect(L.LEGEND_WIDTH).toBeLessThanOrEqual(41 - L.MARGIN)
   const props: L.GraphProps = {
     job: { ...L.emptyJob(), phase: 'working', startedAt: 0 },
     steps: [step('a', 'done', 0, 1000), step('b', 'active', 1000, null)],
@@ -147,16 +148,17 @@ test('the text summary names the job, steps, calls and the last call', () => {
 })
 
 test('the legend rate shortens, then goes, to fit', () => {
-  expect(L.LEGEND_WIDTH).toBe('■ read ■ search ■ edit ■ run ■ fail'.length)
-  expect(L.legendRate(50, 14)).toBe('↻ 14 calls/min')
-  expect(L.legendRate(49, 14)).toBe('↻ 14/min')
-  expect(L.legendRate(44, 14)).toBe('↻ 14/min')
-  expect(L.legendRate(43, 14)).toBe('14/min')
-  expect(L.legendRate(41, 14)).toBe('')
-  for (let cols = 39; cols <= 80; cols++) {
+  // Each ■ counted two cells, as a terminal treating ambiguous widths as wide draws it.
+  expect(L.LEGEND_WIDTH).toBe('■ read ■ search ■ edit ■ run ■ fail'.length + 5)
+  expect(L.legendRate(55, 14)).toBe('~ 14 calls/min')
+  expect(L.legendRate(54, 14)).toBe('~ 14/min')
+  expect(L.legendRate(49, 14)).toBe('~ 14/min')
+  expect(L.legendRate(48, 14)).toBe('14/min')
+  expect(L.legendRate(46, 14)).toBe('')
+  for (let cols = 40; cols <= 80; cols++) {
     for (const n of [0, 7, 14, 120]) {
       const rate = L.legendRate(cols, n)
-      expect(L.LEGEND_WIDTH + (rate ? 1 + rate.length : 0)).toBeLessThanOrEqual(cols)
+      expect(L.LEGEND_WIDTH + (rate ? 1 + L.cells(rate) : 0)).toBeLessThanOrEqual(cols)
     }
   }
 })

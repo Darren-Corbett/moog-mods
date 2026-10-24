@@ -56,7 +56,7 @@ test('6. the pane draws a Client on terminal and desktop, and the text summary o
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ type: 'Client', key: 'graph' })).toBeDefined()
     await ui.resize({ columns: 60, rows: 11 })
-    expect(await ui.find({ in: 'graph', type: 'Text', text: /Pulse · Refactor auth middleware/ })).toBeDefined()
+    expect(await ui.find({ in: 'graph', type: 'Text', text: /Pulse · Refactor auth middle…/ })).toBeDefined()
     expect(await ui.find({ in: 'graph', type: 'Text', text: /Edit {2}session\.ts {2}\(\+2 −1\)/ })).toBeDefined()
     // A few frames on, the wave still draws and the legend is there.
     await ui.advance(500)
@@ -228,25 +228,25 @@ test('every drawn row maps to the element drawn on it, buttons included', async 
     for (let y = 0; y < rows.length; y++) {
       await g.ui.pointer({ type: 'move', x: 0, y })
       const want = keys[y]!.startsWith('wave-') ? `wave ${keys[y]!.slice(5)} col 0` : keys[y] === 'steps' ? 'step 1' : keys[y]
-      expect({ width, y, detail: await g.detail() }).toEqual({ width, y, detail: `▸ mouse 0,${y} → ${want}` })
+      expect({ width, y, detail: await g.detail() }).toEqual({ width, y, detail: `▸ 0,${y} → ${want}` })
     }
-    // The buttons sit flush right in the header: `[−] [+]`, as drawn.
+    // The buttons sit flush right in the header: `[-] [+]`, as drawn.
     const header = rows[0] as { children: Drawn[] }
     const controls = textOf(header.children[header.children.length - 1]!)
-    expect(controls).toBe('[−] [+]')
+    expect(controls).toBe('[-] [+]')
     const at = g.size.columns - controls.length
-    for (const [x, want] of [[at - 1, 'header'], [at, '[−]'], [at + 2, '[−]'], [at + 3, 'header'], [at + 4, '[+]'], [at + 6, '[+]']] as const) {
+    for (const [x, want] of [[at - 1, 'header'], [at, '[-]'], [at + 2, '[-]'], [at + 3, 'header'], [at + 4, '[+]'], [at + 6, '[+]']] as const) {
       await g.ui.pointer({ type: 'move', x, y: 0 })
-      expect({ width, x, detail: await g.detail() }).toEqual({ width, x, detail: `▸ mouse ${x},0 → ${want}` })
+      expect({ width, x, detail: await g.detail() }).toEqual({ width, x, detail: `▸ ${x},0 → ${want}` })
     }
     await g.ui.pointer({ type: 'move', x: 0, y: rows.length })
-    expect(await g.detail()).toBe(`▸ mouse 0,${rows.length} → outside`)
+    expect(await g.detail()).toBe(`▸ 0,${rows.length} → outside`)
     await g.ui.unmount()
   }
   await $.command.run(command('mouse debug off'))
   const g = await mountAt($, 44)
   await g.ui.pointer({ type: 'move', x: 0, y: 1 })
-  expect(await g.detail()).not.toMatch(/mouse/)
+  expect(await g.detail()).not.toMatch(/^▸ \d+,\d+ → /)
   await g.ui.unmount()
 })
 
@@ -341,7 +341,7 @@ test('with the mouse off the graph ignores the pointer and the keys still work',
   expect((await $.command.run(command('doctor'))).text).toMatch(/Mouse: off/)
 })
 
-test('width: [−] and [+] and /pulse width resize the pane between 28 and 72, and it is kept', async ($, on) => {
+test('width: [-] and [+] and /pulse width resize the pane between 28 and 72, and it is kept', async ($, on) => {
   const { calls } = engine(on)
   await busyJob($)
   expect((await $.command.run(command(''))).text).toBe('Pulse pane opened.')
@@ -370,7 +370,126 @@ test('at 28 columns the header is the dot, the time and a trimmed name, and ther
   await busyJob($)
   const g = await mountAt($, 28)
   const rows = await g.rows()
-  expect(textOf(rows[0]!)).toMatch(/^● \d+s · Refactor.*…\[−\] \[\+\]$/)
+  expect(textOf(rows[0]!)).toMatch(/^● \d+s · Refactor.*…\[-\] \[\+\]$/)
   expect(rows.some(r => typeof r !== 'string' && r.props?.key === 'legend')).toBe(false)
   await g.ui.unmount()
 })
+
+// Cells a string takes in a terminal: wide (CJK, fullwidth, emoji) two, combining marks none.
+// With `isAmbiguousWide`, also the symbols a terminal may draw two wide: ● ■ ◆ ↻ − … · → ▸,
+// the step bar's blocks, the rule and the braille the wave is drawn in.
+const AMBIGUOUS = /[●■◆↻−…·→▸▶○✓█▓░─\u2800-\u28ff]/u
+function cellWidth(s: string, isAmbiguousWide = false): number {
+  let n = 0
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!
+    if ((c >= 0x300 && c <= 0x36f) || c === 0x200d || (c >= 0xfe00 && c <= 0xfe0f)) continue
+    const isWide = (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) ||
+      (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) || (c >= 0xffe0 && c <= 0xffe6) ||
+      (c >= 0x1f300 && c <= 0x1f64f) || (c >= 0x1f900 && c <= 0x1f9ff) || (c >= 0x20000 && c <= 0x3fffd) ||
+      (isAmbiguousWide && AMBIGUOUS.test(ch))
+    n += isWide ? 2 : 1
+  }
+  return n
+}
+
+// Every Text that is not inside another Text, with where it sits.
+function rowTexts(n: Drawn, path = ''): { path: string; wrap: unknown }[] {
+  if (typeof n === 'string') return []
+  if (n.type === 'Text') return [{ path, wrap: n.props?.wrap }]
+  return (n.children ?? []).flatMap((c, i) => rowTexts(c, `${path}/${typeof c === 'string' ? i : String(c.props?.key ?? c.type)}`))
+}
+
+// The wave, the rule and the step bar are one glyph per column by design, so drawn two wide they
+// cannot fit: those rows must cut at the edge instead, never wrap. Every other row must fit.
+const isCellGraphic = (key: string) => key.startsWith('wave-') || key === 'rule' || key === 'steps'
+
+// Everything on at once, built up a step at a time; after each step every check runs on the frame as drawn.
+const LONG_NAMES = {
+  plain: 'Refactor the whole authentication middleware and its session handling',
+  wide: '重构认证中间件 🚀 and its 会话处理 so the tokens refresh ✅',
+}
+const EVERYTHING_WIDTHS = [28, 36, 44, 60, 72]
+
+for (const [nameKind, name] of Object.entries(LONG_NAMES)) {
+  test(`everything on (${nameKind} name): rows fit, and the declared height is what is drawn, in the same render`, async ($, on) => {
+    engine(on)
+    const problems: string[] = []
+    for (const bodyRows of [30, 8]) {
+      for (const width of EVERYTHING_WIDTHS) {
+        await $.command.run(command('mouse debug off'))
+        await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+        await $.turn.complete({ turnId: 't0', answer: '' } as never).catch(() => undefined)
+        const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: width, scroll: { offset: 0, bodyRows } }, surface: 'terminal' })
+        const client0 = await ui.find({ type: 'Client', key: 'graph' })
+        await ui.resize({ columns: client0!.props.width as number, rows: client0!.props.height as number })
+
+        const check = async (state: string) => {
+          const client = await ui.find({ type: 'Client', key: 'graph' })
+          const columns = client!.props.width as number
+          const height = client!.props.height as number
+          const rows = ((await ui.drawn({ in: 'graph' })) as { children: Drawn[] }).children
+          if (height > bodyRows) problems.push(`${nameKind} · ${width} cols · bodyRows ${bodyRows} · ${state}: Client declares ${height} rows, the dock has ${bodyRows}`)
+          rows.forEach((r, y) => {
+            for (const t of rowTexts(r)) {
+              if (t.wrap !== 'truncate-end') problems.push(`${nameKind} · ${width} cols · ${state}: row ${y} Text ${t.path} can wrap (wrap=${String(t.wrap)})`)
+            }
+          })
+          for (const isAmbiguousWide of [false, true]) {
+            const at = `${nameKind} · ${width} cols · bodyRows ${bodyRows} · ${state}${isAmbiguousWide ? ' · ambiguous as 2' : ''}`
+            let lines = 0
+            rows.forEach((r, y) => {
+              const key = typeof r === 'string' ? '' : String(r.props?.key ?? '')
+              const w = cellWidth(textOf(r), isAmbiguousWide)
+              const isCut = isAmbiguousWide && isCellGraphic(key)
+              if (w > width - 1 && !isCut) problems.push(`${at}: row ${y} is ${w} cells wide (limit ${width - 1}): ${JSON.stringify(textOf(r))}`)
+              // A row wider than the region wraps onto the next line in a terminal; a cut row stays one.
+              lines += isCut ? 1 : Math.max(1, Math.ceil(w / columns))
+            })
+            if (lines !== height) problems.push(`${at}: Client declares ${height} rows, draws ${lines} lines (${rows.length} rows)`)
+          }
+        }
+        await startJob($, name)
+        await check('long job name')
+        const subjects = ['Read the existing middleware code', 'Split the refresh path out', 'Rewrite the token cache', 'Add retry on expiry', 'Update every caller', 'Write the migration notes', 'Run the whole test suite', 'Clean up the old helpers']
+        for (const subject of subjects) await $.tool.call({ tool: 'TaskCreate', subject, description: '' })
+        for (const id of ['1', '2']) await $.tool.call({ tool: 'TaskUpdate', taskId: id, status: 'completed' })
+        await $.tool.call({ tool: 'TaskUpdate', taskId: '3', status: 'in_progress' })
+        await check('8 steps, one active')
+        await $.tool.call({ tool: 'Bash', command: 'false' })
+        await $.tool.call({ tool: 'Bash', command: 'false' })
+        await check('failures')
+        await $.tool.call({ tool: 'Bash', command: `cd /repo/packages/auth && bun test --coverage --reporter=verbose src/middleware/session/refresh.test.ts ${nameKind === 'wide' ? '# 测试 🚀 全部' : '| tee /tmp/out.log'}` })
+        await check('long Bash command in the detail line')
+        await $.tool.call({ tool: 'Read', file_path: `/repo/packages/auth/src/middleware/session/${nameKind === 'wide' ? '会话刷新令牌缓存处理程序' : 'very-long-session-refresh-token-cache-handler'}.test.ts` })
+        await check('long file path in the detail line')
+        for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: 'false' })
+        await check('stuck')
+        await $.tool.call({ tool: 'AskUserQuestion', questions: [] } as never)
+        await check('needs you')
+        await ui.post({ type: 'pin', pin: { kind: 'column', at: L.bucketAt(1_000_000) } })
+        await check('pinned column')
+        await ui.post({ type: 'pin', pin: { kind: 'step', id: '3' } })
+        await check('pinned step')
+        await $.command.run(command('mouse debug'))
+        const client = await ui.find({ type: 'Client', key: 'graph' })
+        await ui.pointer({ type: 'move', x: (client!.props.width as number) - 1, y: (client!.props.height as number) - 1 })
+        await check('mouse debug')
+        await ui.advance(1500)
+        await check('mouse debug, 1.5s on')
+        await ui.unmount()
+        // The text summary, where the graph is not drawn, cuts its rows too.
+        const vs = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: width }, surface: 'vscode' })
+        for (const t of rowTexts((await vs.drawn()) as Drawn)) {
+          if (t.wrap !== 'truncate-end') problems.push(`${nameKind} · ${width} cols · summary Text ${t.path} can wrap`)
+        }
+        for (const t of (await vs.findAll({ type: 'Text' }))) {
+          const w = cellWidth(String(t.text ?? ''), true)
+          if (w > width - 1) problems.push(`${nameKind} · ${width} cols · summary row is ${w} cells (ambiguous as 2): ${JSON.stringify(t.text)}`)
+        }
+        await vs.unmount()
+      }
+    }
+    expect(problems).toEqual([])
+  })
+}
