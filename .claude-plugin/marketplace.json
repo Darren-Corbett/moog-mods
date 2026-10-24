@@ -8,6 +8,12 @@
       "version": "0.2.0",
       "source": "./clean-view",
       "description": "Checklist band above the prompt, with read-only tool noise folded into one line. Diffs, commands and failures stay visible."
+    },
+    {
+      "name": "pulse",
+      "version": "0.1.1",
+      "source": "./pulse",
+      "description": "A live, animated graph of what Claude is doing, in a pane beside the chat. Hover to see a moment, click to pin it."
     }
   ]
 }

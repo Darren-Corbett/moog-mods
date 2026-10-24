@@ -1,0 +1,7 @@
+{
+  "name": "pulse",
+  "version": "0.1.1",
+  "description": "A live, animated graph of what Claude is doing, in a pane beside the chat. Hover to see a moment, click to pin it.",
+  "author": { "name": "Darren Corbett" },
+  "types": "./types/index.d.ts"
+}
